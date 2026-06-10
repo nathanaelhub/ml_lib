@@ -1,0 +1,199 @@
+#include "ml_lib.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+/* On MSVC we can verify "zero leaks" without valgrind by enabling the
+ * CRT debug heap. With this on, _CrtDumpMemoryLeaks() at exit prints any
+ * block that was allocated but never freed. On other toolchains use the
+ * Makefile's `make memcheck` (valgrind) or `make asan` targets instead. */
+#if defined(_MSC_VER) && defined(_DEBUG)
+#  define _CRTDBG_MAP_ALLOC
+#  include <crtdbg.h>
+#  define ENABLE_CRT_LEAK_CHECK 1
+#else
+#  define ENABLE_CRT_LEAK_CHECK 0
+#endif
+
+#define NUM_SAMPLES 4
+#define NUM_INPUTS  2
+
+/* Shared 2-bit input table; targets differ per gate. */
+static const double INPUTS[NUM_SAMPLES][NUM_INPUTS] = {
+    {0.0, 0.0},
+    {0.0, 1.0},
+    {1.0, 0.0},
+    {1.0, 1.0},
+};
+static const double OR_TARGET[NUM_SAMPLES]  = { 0.0, 1.0, 1.0, 1.0 };
+static const double XOR_TARGET[NUM_SAMPLES] = { 0.0, 1.0, 1.0, 0.0 };
+
+/* ================================================================== *
+ *  Demo 1: a single sigmoid unit (logistic regression) learns OR.
+ *  OR is linearly separable, so one unit suffices.
+ * ================================================================== */
+static int run_or_demo(void)
+{
+    enum { EPOCHS = 5000 };
+    const double LR = 0.5;
+
+    printf("=== Demo 1: logistic regression (1 unit) on OR ===\n\n");
+
+    Layer  net    = layer_alloc(NUM_INPUTS, 1);
+    Matrix x      = mat_alloc(NUM_INPUTS, 1);
+    Matrix pred   = mat_alloc(1, 1);
+    Matrix target = mat_alloc(1, 1);
+
+    for (int epoch = 0; epoch < EPOCHS; ++epoch) {
+        double err = 0.0;
+        for (int s = 0; s < NUM_SAMPLES; ++s) {
+            x.data[0] = INPUTS[s][0];
+            x.data[1] = INPUTS[s][1];
+            target.data[0] = OR_TARGET[s];
+            layer_forward(&net, &x, &pred);
+            err += layer_backward(&net, &x, &pred, &target, LR);
+        }
+        if (epoch % 2000 == 0 || epoch == EPOCHS - 1)
+            printf("  epoch %5d   sse = %.6f\n", epoch, err);
+    }
+
+    int correct = 0;
+    printf("\n");
+    for (int s = 0; s < NUM_SAMPLES; ++s) {
+        x.data[0] = INPUTS[s][0];
+        x.data[1] = INPUTS[s][1];
+        layer_forward(&net, &x, &pred);
+        int label = pred.data[0] >= 0.5 ? 1 : 0;
+        int truth = (int)OR_TARGET[s];
+        correct += (label == truth);
+        printf("  %g OR %g -> %.4f (class %d, expected %d) %s\n",
+               INPUTS[s][0], INPUTS[s][1], pred.data[0], label, truth,
+               label == truth ? "OK" : "WRONG");
+    }
+    printf("  accuracy: %d/%d\n\n", correct, NUM_SAMPLES);
+
+    /* Clean teardown. */
+    mat_free(&x);
+    mat_free(&pred);
+    mat_free(&target);
+    layer_free(&net);
+
+    return correct == NUM_SAMPLES;
+}
+
+/* ================================================================== *
+ *  Demo 2: a 2-4-1 MLP learns XOR via full backpropagation.
+ *  XOR is NOT linearly separable, so the hidden layer is essential --
+ *  a single unit (Demo 1 style) provably cannot solve it.
+ * ================================================================== */
+static int run_xor_demo(void)
+{
+    enum { EPOCHS = 20000 };
+    const double LR = 0.5;
+
+    printf("=== Demo 2: 2-4-1 MLP on XOR (full backprop) ===\n\n");
+
+    /* topology: 2 inputs -> 4 tanh hidden -> 1 sigmoid output */
+    const size_t     sizes[] = { NUM_INPUTS, 4, 1 };
+    const Activation acts[]  = { ACT_TANH, ACT_SIGMOID };
+    Network net = net_alloc(sizes, acts, 2);
+
+    Matrix x      = mat_alloc(NUM_INPUTS, 1);
+    Matrix target = mat_alloc(1, 1);
+
+    for (int epoch = 0; epoch < EPOCHS; ++epoch) {
+        double loss = 0.0;
+        for (int s = 0; s < NUM_SAMPLES; ++s) {
+            x.data[0] = INPUTS[s][0];
+            x.data[1] = INPUTS[s][1];
+            target.data[0] = XOR_TARGET[s];
+            loss += net_train_sample(&net, &x, &target, LR);
+        }
+        if (epoch % 4000 == 0 || epoch == EPOCHS - 1)
+            printf("  epoch %5d   loss = %.6f\n", epoch, loss);
+    }
+
+    int correct = 0;
+    printf("\n");
+    for (int s = 0; s < NUM_SAMPLES; ++s) {
+        x.data[0] = INPUTS[s][0];
+        x.data[1] = INPUTS[s][1];
+        const Matrix *out = net_forward(&net, &x);
+        int label = out->data[0] >= 0.5 ? 1 : 0;
+        int truth = (int)XOR_TARGET[s];
+        correct += (label == truth);
+        printf("  %g XOR %g -> %.4f (class %d, expected %d) %s\n",
+               INPUTS[s][0], INPUTS[s][1], out->data[0], label, truth,
+               label == truth ? "OK" : "WRONG");
+    }
+    printf("  accuracy: %d/%d\n\n", correct, NUM_SAMPLES);
+
+    /* Clean teardown + idempotency check (double-free must be safe). */
+    mat_free(&x);
+    mat_free(&target);
+    net_free(&net);
+    net_free(&net);
+
+    return correct == NUM_SAMPLES;
+}
+
+/* ================================================================== *
+ *  Demo 3: gradient checking. Compares analytic backprop gradients
+ *  against central finite differences on a fresh, untrained network.
+ *  A tiny max difference means the backprop math is correct.
+ * ================================================================== */
+static int run_gradient_check(void)
+{
+    const double EPS = 1e-6;
+    const double TOL = 1e-5;
+
+    printf("=== Demo 3: gradient check (backprop vs. finite differences) ===\n\n");
+
+    const size_t     sizes[] = { 3, 5, 2 };
+    const Activation acts[]  = { ACT_TANH, ACT_SIGMOID };
+    Network net = net_alloc(sizes, acts, 2);
+
+    Matrix x      = mat_alloc(3, 1);
+    Matrix target = mat_alloc(2, 1);
+    x.data[0] = 0.7;  x.data[1] = -0.3; x.data[2] = 0.5;
+    target.data[0] = 1.0; target.data[1] = 0.0;
+
+    double max_diff = net_gradient_check(&net, &x, &target, EPS);
+    int    ok = max_diff < TOL;
+
+    printf("  max |analytic - numerical| = %.3e  (tolerance %.0e)  %s\n\n",
+           max_diff, TOL, ok ? "PASS" : "FAIL");
+
+    mat_free(&x);
+    mat_free(&target);
+    net_free(&net);
+
+    return ok;
+}
+
+int main(void)
+{
+#if ENABLE_CRT_LEAK_CHECK
+    /* Report any leaked blocks to stderr automatically at program exit. */
+    _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+    _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
+#endif
+
+    srand((unsigned)time(NULL));
+
+    int ok_or   = run_or_demo();
+    int ok_xor  = run_xor_demo();
+    int ok_grad = run_gradient_check();
+
+    printf("--- summary ---\n");
+    printf("  OR (logistic regression) : %s\n", ok_or   ? "PASS" : "FAIL");
+    printf("  XOR (2-4-1 MLP)          : %s\n", ok_xor  ? "PASS" : "FAIL");
+    printf("  gradient check           : %s\n", ok_grad ? "PASS" : "FAIL");
+    printf("\nall resources released via clean teardown.\n"
+           "verify zero leaks with: `make memcheck` (valgrind),\n"
+           "`make asan` (sanitizers), or a debug MSVC build (CRT heap).\n");
+
+    return (ok_or && ok_xor && ok_grad) ? EXIT_SUCCESS : EXIT_FAILURE;
+}
