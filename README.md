@@ -1,5 +1,8 @@
 # ml_lib — a tiny neural network library in pure C
 
+[![CI](https://github.com/nathanaelhub/ml_lib/actions/workflows/ci.yml/badge.svg)](https://github.com/nathanaelhub/ml_lib/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A dependency-free machine learning library written entirely in C (C11), built
 on a single flat, row-major `Matrix` type. It implements the linear algebra,
 activation functions, and **full backpropagation** needed to train a

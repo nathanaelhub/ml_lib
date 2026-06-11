@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # ---- gcc build + run + valgrind leak check (Linux) ----
+  make-linux:
+    name: make + valgrind (gcc, ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+
+      - name: Build and run demos
+        run: make run
+
+      - name: Memory-leak check (valgrind, fails on any leak)
+        run: make memcheck
+
+      - name: Sanitizer build (ASan + UBSan)
+        run: make asan
+
+  # ---- portable CMake build + ctest smoke test (Linux) ----
+  cmake-linux:
+    name: cmake + ctest (gcc, ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test (demo self-checks: OR / XOR / gradient check)
+        run: ctest --test-dir build --output-on-failure
+
+  # ---- MSVC build + run (Windows) ----
+  msvc-windows:
+    name: cl + run (MSVC, windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build with cl
+        run: cl /W4 /O2 ml_lib.c main.c /Fe:ml_demo.exe
+
+      - name: Run demos
+        run: .\ml_demo.exe
