@@ -39,7 +39,7 @@ jobs:
       - name: Build
         run: cmake --build build
 
-      - name: Test (demo self-checks: OR / XOR / gradient check)
+      - name: "Test (demo self-checks: OR / XOR / gradient check)"
         run: ctest --test-dir build --output-on-failure
 
   # ---- MSVC build + run (Windows) ----
