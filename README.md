@@ -24,6 +24,8 @@ The goal is clarity: every gradient is hand-derived, and a built-in
   - single sigmoid unit (logistic regression),
   - stackable `Network` MLP trained with full backpropagation.
 - **Multi-class** — softmax output + cross-entropy loss for 3+ classes.
+- **Train/validation split** — shuffled hold-out + accuracy helper, so
+  reported numbers measure generalisation rather than memorisation.
 - **Mini-batch SGD** — shuffled mini-batches with gradient accumulation.
 - **Adam optimizer** — per-parameter adaptive moments with bias correction.
 - **CSV dataset loader** — load numeric feature/label rows; per-sample
@@ -96,9 +98,10 @@ ml_demo.exe
   save/load round-trip: max prediction diff = 0.0e+00  PASS
 
 === Demo 6: multi-class softmax on the Iris dataset ===
-  loaded 150 samples (4 features, 3 classes)
-  epoch  119   mean cross-entropy = 0.038642
-  train accuracy: 148/150 (98.7%)
+  150 samples (4 features, 3 classes) -> 120 train / 30 validation
+  epoch  119   mean cross-entropy = 0.009016
+  train accuracy:      100.0%
+  validation accuracy: 93.3%  (held-out, 30 samples)
 ```
 
 XOR is **not** linearly separable, so a single unit provably cannot learn it —
@@ -107,8 +110,9 @@ load a 300-point 2D nonlinear set from `data/xor2d.csv` and train a 2-8-1 net to
 100% accuracy — with mini-batch SGD, then with Adam (which reaches a lower loss
 in half the epochs). Demo 5 also saves the trained model, reloads it, and
 confirms the predictions are bit-identical. Demo 6 goes multi-class: a 4-16-3
-net with a **softmax output + cross-entropy** classifies the **Iris** dataset to
-~99%. The gradient check (Demo 3) verifies *both* the squared-error and the
+net with a **softmax output + cross-entropy** classifies the **Iris** dataset,
+trained on an 80% split and scored on the held-out 20% (~93% validation). The
+gradient check (Demo 3) verifies *both* the squared-error and the
 softmax/cross-entropy backprop. The demo program returns a non-zero exit code if
 any check fails, so it doubles as a smoke test under `ctest`.
 
@@ -133,6 +137,10 @@ void   net_free(Network *net);
 Dataset dataset_load_csv(const char *path, size_t n_features, size_t n_outputs, int skip_header);
 double  net_train_epoch(Network *net, const Dataset *d, size_t batch_size, double lr);
 void    dataset_free(Dataset *d);
+
+/* split + evaluate */
+int    dataset_split(const Dataset *d, double val_frac, Dataset *train, Dataset *val);
+double net_accuracy(Network *net, const Dataset *d);
 
 /* Adam optimizer + persistence */
 Optimizer adam_default(double lr);
@@ -162,8 +170,9 @@ net_free(&net);
 - [x] Optimizers beyond plain SGD (Adam)
 - [x] Save / load trained weights
 - [x] Multi-class output (softmax + cross-entropy)
+- [x] Train/validation split + held-out accuracy
 - [ ] Vectorized batch forward/backward (one `mat_mul` per layer per batch)
-- [ ] Train/validation split + early stopping
+- [ ] Early stopping on validation loss
 
 ## License
 

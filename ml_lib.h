@@ -217,6 +217,14 @@ Dataset dataset_load_csv(const char *path, size_t n_features,
 Matrix dataset_input(const Dataset *d, size_t i);    /* (n_features x 1) */
 Matrix dataset_target(const Dataset *d, size_t i);   /* (n_outputs  x 1) */
 
+/* Randomly shuffle the samples and split them into a training set (the
+ * first 1-val_frac) and a validation set (the remaining val_frac). Both
+ * outputs own copies of their rows -- free each with dataset_free. Returns
+ * 0 on success, -1 on a bad argument or allocation failure. (Not stratified;
+ * the shuffle keeps class balance roughly intact for a balanced source.) */
+int dataset_split(const Dataset *d, double val_frac,
+                  Dataset *train, Dataset *val);
+
 /* ------------------------ mini-batch training --------------------- */
 
 /* One epoch of mini-batch SGD: shuffles the samples, and for each
@@ -224,6 +232,10 @@ Matrix dataset_target(const Dataset *d, size_t i);   /* (n_outputs  x 1) */
  * averaged update. Returns the mean loss over the epoch (-1.0 on error). */
 double net_train_epoch(Network *net, const Dataset *d, size_t batch_size,
                        double lr);
+
+/* Classification accuracy (%) over a dataset: a single output is thresholded
+ * at 0.5, multiple outputs are compared as argmax vs argmax (one-hot). */
+double net_accuracy(Network *net, const Dataset *d);
 
 /* --------------------------- Adam optimizer ----------------------- */
 

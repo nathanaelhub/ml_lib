@@ -667,6 +667,54 @@ Dataset dataset_load_csv(const char *path, size_t n_features,
     return d;
 }
 
+int dataset_split(const Dataset *d, double val_frac,
+                  Dataset *train, Dataset *val)
+{
+    if (d == NULL || train == NULL || val == NULL)
+        return -1;
+    if (val_frac < 0.0 || val_frac > 1.0)
+        return -1;
+
+    size_t n       = d->n_samples;
+    size_t n_val   = (size_t)(val_frac * (double)n);
+    size_t n_train = n - n_val;
+
+    size_t *idx = (size_t *)malloc(n * sizeof(size_t));
+    if (idx == NULL)
+        return -1;
+    for (size_t i = 0; i < n; ++i)
+        idx[i] = i;
+    for (size_t i = n; i-- > 1; ) {
+        size_t j = (size_t)(rand() % (int)(i + 1));
+        size_t t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+    }
+
+    *train = dataset_alloc(n_train, d->n_features, d->n_outputs);
+    *val   = dataset_alloc(n_val,   d->n_features, d->n_outputs);
+    if ((n_train && train->X.data == NULL) || (n_val && val->X.data == NULL)) {
+        free(idx);
+        dataset_free(train);
+        dataset_free(val);
+        return -1;
+    }
+
+    /* Copy each shuffled row into the train (first n_train) or val set. */
+    for (size_t k = 0; k < n; ++k) {
+        size_t   src = idx[k];
+        Dataset *dst = (k < n_train) ? train : val;
+        size_t   row = (k < n_train) ? k : (k - n_train);
+        memcpy(dst->X.data + row * d->n_features,
+               d->X.data   + src * d->n_features,
+               d->n_features * sizeof(double));
+        memcpy(dst->Y.data + row * d->n_outputs,
+               d->Y.data   + src * d->n_outputs,
+               d->n_outputs * sizeof(double));
+    }
+
+    free(idx);
+    return 0;
+}
+
 /* ======================= mini-batch training ===================== */
 
 /* Shared epoch loop. If `opt` is non-NULL the batch update uses Adam;
@@ -727,6 +775,27 @@ double net_train_epoch_adam(Network *net, const Dataset *d, size_t batch_size,
                             Optimizer *opt)
 {
     return train_epoch_impl(net, d, batch_size, 0.0, opt);
+}
+
+double net_accuracy(Network *net, const Dataset *d)
+{
+    if (d->n_samples == 0)
+        return 0.0;
+
+    size_t correct = 0;
+    for (size_t i = 0; i < d->n_samples; ++i) {
+        Matrix        xv  = dataset_input(d, i);
+        Matrix        tv  = dataset_target(d, i);
+        const Matrix *out = net_forward(net, &xv);
+        if (d->n_outputs == 1) {
+            int p = out->data[0] >= 0.5 ? 1 : 0;
+            int t = tv.data[0]   >= 0.5 ? 1 : 0;
+            correct += (p == t);
+        } else {
+            correct += (mat_argmax(out) == mat_argmax(&tv));
+        }
+    }
+    return 100.0 * (double)correct / (double)d->n_samples;
 }
 
 /* ========================= Adam optimizer ======================== */

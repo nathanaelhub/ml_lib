@@ -233,18 +233,8 @@ static int run_csv_minibatch_demo(void)
             printf("  epoch %4d   mean loss = %.6f\n", epoch, loss);
     }
 
-    size_t correct = 0;
-    for (size_t i = 0; i < d.n_samples; ++i) {
-        Matrix xv = dataset_input(&d, i);
-        Matrix tv = dataset_target(&d, i);
-        const Matrix *out = net_forward(&net, &xv);
-        int label = out->data[0] >= 0.5 ? 1 : 0;
-        int truth = (int)(tv.data[0] + 0.5);
-        correct += (label == truth);
-    }
-    double acc = 100.0 * (double)correct / (double)d.n_samples;
-    printf("\n  train accuracy: %zu/%zu (%.1f%%)\n\n",
-           correct, d.n_samples, acc);
+    double acc = net_accuracy(&net, &d);
+    printf("\n  train accuracy: %.1f%%\n\n", acc);
 
     net_free(&net);
     dataset_free(&d);
@@ -281,16 +271,8 @@ static int run_adam_save_load_demo(void)
             printf("  epoch %4d   mean loss = %.6f\n", epoch, loss);
     }
 
-    size_t correct = 0;
-    for (size_t i = 0; i < d.n_samples; ++i) {
-        Matrix xv = dataset_input(&d, i);
-        Matrix tv = dataset_target(&d, i);
-        const Matrix *out = net_forward(&net, &xv);
-        correct += ((out->data[0] >= 0.5 ? 1 : 0) == (int)(tv.data[0] + 0.5));
-    }
-    double acc = 100.0 * (double)correct / (double)d.n_samples;
-    printf("\n  Adam train accuracy: %zu/%zu (%.1f%%)\n",
-           correct, d.n_samples, acc);
+    double acc = net_accuracy(&net, &d);
+    printf("\n  Adam train accuracy: %.1f%%\n", acc);
 
     /* Save -> load -> verify the reloaded model predicts identically. */
     const char *path = "ml_lib_model.txt";
@@ -326,11 +308,14 @@ static int run_adam_save_load_demo(void)
  *  Demo 6: multi-class classification on the Iris dataset. A 4-16-3
  *  MLP (tanh hidden -> softmax output) trained with Adam + cross-entropy
  *  predicts one of three iris species from four flower measurements.
+ *  Trained on an 80% split and scored on the held-out 20% so the
+ *  reported number reflects generalisation, not memorisation.
  * ================================================================== */
 static int run_iris_softmax_demo(void)
 {
     enum { EPOCHS = 120 };
-    const size_t BATCH = 16;
+    const size_t BATCH    = 16;
+    const double VAL_FRAC = 0.2;
 
     printf("=== Demo 6: multi-class softmax on the Iris dataset ===\n\n");
 
@@ -340,8 +325,15 @@ static int run_iris_softmax_demo(void)
         printf("  (skipped: could not open data/iris.csv from this directory)\n\n");
         return 1;
     }
-    printf("  loaded %zu samples (%zu features, %zu classes)\n\n",
-           d.n_samples, d.n_features, d.n_outputs);
+
+    Dataset train, val;
+    if (dataset_split(&d, VAL_FRAC, &train, &val) != 0) {
+        printf("  (error: could not split dataset)\n\n");
+        dataset_free(&d);
+        return 0;
+    }
+    printf("  %zu samples (%zu features, %zu classes) -> %zu train / %zu validation\n\n",
+           d.n_samples, d.n_features, d.n_outputs, train.n_samples, val.n_samples);
 
     const size_t     sizes[] = { 4, 16, 3 };
     const Activation acts[]  = { ACT_TANH, ACT_SOFTMAX };
@@ -349,27 +341,24 @@ static int run_iris_softmax_demo(void)
     Optimizer opt = adam_default(0.01);
 
     for (int epoch = 0; epoch < EPOCHS; ++epoch) {
-        double loss = net_train_epoch_adam(&net, &d, BATCH, &opt);
+        double loss = net_train_epoch_adam(&net, &train, BATCH, &opt);
         if (epoch % 30 == 0 || epoch == EPOCHS - 1)
             printf("  epoch %4d   mean cross-entropy = %.6f\n", epoch, loss);
     }
 
-    /* Accuracy = fraction where argmax(prediction) == argmax(one-hot label). */
-    size_t correct = 0;
-    for (size_t i = 0; i < d.n_samples; ++i) {
-        Matrix xv = dataset_input(&d, i);
-        Matrix tv = dataset_target(&d, i);
-        const Matrix *out = net_forward(&net, &xv);
-        correct += (mat_argmax(out) == mat_argmax(&tv));
-    }
-    double acc = 100.0 * (double)correct / (double)d.n_samples;
-    printf("\n  train accuracy: %zu/%zu (%.1f%%)\n\n",
-           correct, d.n_samples, acc);
+    double train_acc = net_accuracy(&net, &train);
+    double val_acc   = net_accuracy(&net, &val);
+    printf("\n  train accuracy:      %.1f%%\n", train_acc);
+    printf("  validation accuracy: %.1f%%  (held-out, %zu samples)\n\n",
+           val_acc, val.n_samples);
 
     net_free(&net);
+    dataset_free(&train);
+    dataset_free(&val);
     dataset_free(&d);
 
-    return acc >= 95.0;
+    /* Pass on the held-out set -- the honest measure of generalisation. */
+    return val_acc >= 90.0;
 }
 
 int main(void)
