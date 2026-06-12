@@ -19,10 +19,11 @@ The goal is clarity: every gradient is hand-derived, and a built-in
   block; element `(r, c)` lives at `data[r * cols + c]`.
 - **Core linear algebra** — allocation/teardown, `mat_mul`, `mat_add`,
   `mat_transpose`, scaled add, random init.
-- **Activations** — sigmoid, tanh, ReLU, each with its derivative.
+- **Activations** — sigmoid, tanh, ReLU (element-wise) and softmax (output).
 - **Two models**
   - single sigmoid unit (logistic regression),
   - stackable `Network` MLP trained with full backpropagation.
+- **Multi-class** — softmax output + cross-entropy loss for 3+ classes.
 - **Mini-batch SGD** — shuffled mini-batches with gradient accumulation.
 - **Adam optimizer** — per-parameter adaptive moments with bias correction.
 - **CSV dataset loader** — load numeric feature/label rows; per-sample
@@ -38,8 +39,9 @@ The goal is clarity: every gradient is hand-derived, and a built-in
 | ----------------- | -------------------------------------------------------------- |
 | `ml_lib.h`        | Public API                                                     |
 | `ml_lib.c`        | Implementation (explicit loops + pointer arithmetic)           |
-| `main.c`          | Five self-checking demos (OR, XOR, grad check, CSV batch, Adam)|
+| `main.c`          | Six self-checking demos (OR, XOR, grad check, batch, Adam, Iris)|
 | `data/xor2d.csv`  | 300-point 2D nonlinear classification set for the batch demo   |
+| `data/iris.csv`   | Iris (150 samples, standardized, one-hot) for the softmax demo |
 | `Makefile`        | `all` / `run` / `memcheck` / `asan` / `clean` (gcc + valgrind) |
 | `CMakeLists.txt`  | Portable build (MSVC and gcc/clang) with `ctest` smoke test    |
 
@@ -92,6 +94,11 @@ ml_demo.exe
   epoch   99   mean loss = 0.000475
   Adam train accuracy: 300/300 (100.0%)
   save/load round-trip: max prediction diff = 0.0e+00  PASS
+
+=== Demo 6: multi-class softmax on the Iris dataset ===
+  loaded 150 samples (4 features, 3 classes)
+  epoch  119   mean cross-entropy = 0.038642
+  train accuracy: 148/150 (98.7%)
 ```
 
 XOR is **not** linearly separable, so a single unit provably cannot learn it —
@@ -99,8 +106,11 @@ the 2-4-1 hidden layer (tanh → sigmoid) is what makes it work. Demos 4 and 5
 load a 300-point 2D nonlinear set from `data/xor2d.csv` and train a 2-8-1 net to
 100% accuracy — with mini-batch SGD, then with Adam (which reaches a lower loss
 in half the epochs). Demo 5 also saves the trained model, reloads it, and
-confirms the predictions are bit-identical. The demo program returns a non-zero
-exit code if any check fails, so it doubles as a smoke test under `ctest`.
+confirms the predictions are bit-identical. Demo 6 goes multi-class: a 4-16-3
+net with a **softmax output + cross-entropy** classifies the **Iris** dataset to
+~99%. The gradient check (Demo 3) verifies *both* the squared-error and the
+softmax/cross-entropy backprop. The demo program returns a non-zero exit code if
+any check fails, so it doubles as a smoke test under `ctest`.
 
 ## API sketch
 
@@ -111,9 +121,10 @@ void   mat_free(Matrix *m);
 int    mat_mul(Matrix *out, const Matrix *a, const Matrix *b);
 int    mat_transpose(Matrix *out, const Matrix *a);
 
-/* network */
+/* network (acts may be ACT_SIGMOID / ACT_TANH / ACT_RELU / ACT_SOFTMAX) */
 Network net_alloc(const size_t *sizes, const Activation *acts, size_t num_layers);
 const Matrix *net_forward(Network *net, const Matrix *x);
+size_t mat_argmax(const Matrix *m);   /* read off the predicted class */
 double net_train_sample(Network *net, const Matrix *x, const Matrix *target, double lr);
 double net_gradient_check(Network *net, const Matrix *x, const Matrix *target, double eps);
 void   net_free(Network *net);
@@ -150,8 +161,9 @@ net_free(&net);
 - [x] CSV / dataset loader for problems larger than a truth table
 - [x] Optimizers beyond plain SGD (Adam)
 - [x] Save / load trained weights
+- [x] Multi-class output (softmax + cross-entropy)
 - [ ] Vectorized batch forward/backward (one `mat_mul` per layer per batch)
-- [ ] Multi-class output (softmax + cross-entropy)
+- [ ] Train/validation split + early stopping
 
 ## License
 

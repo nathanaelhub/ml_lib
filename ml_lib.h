@@ -66,16 +66,29 @@ double sigmoid_prime_from_output(double y);   /* y = sigmoid(x) -> y*(1-y) */
 /* Apply sigmoid element-wise: out[i] = sigmoid(in[i]). out may alias in. */
 int mat_sigmoid(Matrix *out, const Matrix *in);
 
-/* Selectable activation functions for network layers. */
+/* Selectable activation functions for network layers.
+ *
+ * ACT_SIGMOID/TANH/RELU are element-wise. ACT_SOFTMAX is special: it acts
+ * over a whole layer's output vector (not element-wise) and is intended
+ * only as an OUTPUT activation, paired with cross-entropy loss. With that
+ * pairing the output error simplifies to (prediction - target), exactly
+ * like the other outputs, so the rest of backprop is unchanged. */
 typedef enum {
     ACT_SIGMOID = 0,
     ACT_TANH,
-    ACT_RELU
+    ACT_RELU,
+    ACT_SOFTMAX
 } Activation;
 
-/* Scalar activation and its derivative w.r.t. the pre-activation z. */
+/* Scalar activation and its derivative w.r.t. the pre-activation z.
+ * (Not defined for ACT_SOFTMAX, which is a vector op handled by the
+ * network forward/backward passes.) */
 double act_apply(double x, Activation a);
 double act_prime(double z, Activation a);
+
+/* Index of the largest element (row-major flat). Handy for reading off a
+ * softmax/regression output as a predicted class. */
+size_t mat_argmax(const Matrix *m);
 
 /* ------------------------- neural network ------------------------- */
 
@@ -139,8 +152,9 @@ void    net_free(Network *net);
  * dimension mismatch. */
 const Matrix *net_forward(Network *net, const Matrix *x);
 
-/* 1/2 * sum((a_out - target)^2) using the activations cached by the most
- * recent net_forward call. */
+/* Loss using the activations cached by the most recent net_forward call.
+ * If the output layer is ACT_SOFTMAX this is categorical cross-entropy
+ * (-sum t_k log a_k); otherwise it is squared error 1/2 sum (a_k - t_k)^2. */
 double net_loss(const Network *net, const Matrix *target);
 
 /* Backpropagation for one sample: overwrites gW/gb in every layer with

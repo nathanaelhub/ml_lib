@@ -167,26 +167,38 @@ static int run_gradient_check(void)
 
     printf("=== Demo 3: gradient check (backprop vs. finite differences) ===\n\n");
 
-    const size_t     sizes[] = { 3, 5, 2 };
-    const Activation acts[]  = { ACT_TANH, ACT_SIGMOID };
-    Network net = net_alloc(sizes, acts, 2);
+    Matrix x = mat_alloc(3, 1);
+    x.data[0] = 0.7; x.data[1] = -0.3; x.data[2] = 0.5;
 
-    Matrix x      = mat_alloc(3, 1);
-    Matrix target = mat_alloc(2, 1);
-    x.data[0] = 0.7;  x.data[1] = -0.3; x.data[2] = 0.5;
-    target.data[0] = 1.0; target.data[1] = 0.0;
+    /* Case A: tanh hidden -> sigmoid output with squared-error loss. */
+    const size_t     sizesA[] = { 3, 5, 2 };
+    const Activation actsA[]  = { ACT_TANH, ACT_SIGMOID };
+    Network netA = net_alloc(sizesA, actsA, 2);
+    Matrix  tA   = mat_alloc(2, 1);
+    tA.data[0] = 1.0; tA.data[1] = 0.0;
+    double diffA = net_gradient_check(&netA, &x, &tA, EPS);
+    int    okA   = diffA < TOL;
+    printf("  sigmoid + squared error : max diff = %.3e  %s\n",
+           diffA, okA ? "PASS" : "FAIL");
 
-    double max_diff = net_gradient_check(&net, &x, &target, EPS);
-    int    ok = max_diff < TOL;
-
-    printf("  max |analytic - numerical| = %.3e  (tolerance %.0e)  %s\n\n",
-           max_diff, TOL, ok ? "PASS" : "FAIL");
+    /* Case B: tanh hidden -> softmax output with cross-entropy loss. */
+    const size_t     sizesB[] = { 3, 5, 3 };
+    const Activation actsB[]  = { ACT_TANH, ACT_SOFTMAX };
+    Network netB = net_alloc(sizesB, actsB, 2);
+    Matrix  tB   = mat_alloc(3, 1);                  /* one-hot target */
+    tB.data[0] = 0.0; tB.data[1] = 1.0; tB.data[2] = 0.0;
+    double diffB = net_gradient_check(&netB, &x, &tB, EPS);
+    int    okB   = diffB < TOL;
+    printf("  softmax + cross-entropy : max diff = %.3e  %s\n\n",
+           diffB, okB ? "PASS" : "FAIL");
 
     mat_free(&x);
-    mat_free(&target);
-    net_free(&net);
+    mat_free(&tA);
+    mat_free(&tB);
+    net_free(&netA);
+    net_free(&netB);
 
-    return ok;
+    return okA && okB;
 }
 
 /* ================================================================== *
@@ -310,6 +322,56 @@ static int run_adam_save_load_demo(void)
     return (acc >= 95.0) && roundtrip;
 }
 
+/* ================================================================== *
+ *  Demo 6: multi-class classification on the Iris dataset. A 4-16-3
+ *  MLP (tanh hidden -> softmax output) trained with Adam + cross-entropy
+ *  predicts one of three iris species from four flower measurements.
+ * ================================================================== */
+static int run_iris_softmax_demo(void)
+{
+    enum { EPOCHS = 120 };
+    const size_t BATCH = 16;
+
+    printf("=== Demo 6: multi-class softmax on the Iris dataset ===\n\n");
+
+    /* 4 feature columns + 3 one-hot label columns, with a header. */
+    Dataset d = dataset_load_csv("data/iris.csv", 4, 3, 1);
+    if (d.X.data == NULL) {
+        printf("  (skipped: could not open data/iris.csv from this directory)\n\n");
+        return 1;
+    }
+    printf("  loaded %zu samples (%zu features, %zu classes)\n\n",
+           d.n_samples, d.n_features, d.n_outputs);
+
+    const size_t     sizes[] = { 4, 16, 3 };
+    const Activation acts[]  = { ACT_TANH, ACT_SOFTMAX };
+    Network   net = net_alloc(sizes, acts, 2);
+    Optimizer opt = adam_default(0.01);
+
+    for (int epoch = 0; epoch < EPOCHS; ++epoch) {
+        double loss = net_train_epoch_adam(&net, &d, BATCH, &opt);
+        if (epoch % 30 == 0 || epoch == EPOCHS - 1)
+            printf("  epoch %4d   mean cross-entropy = %.6f\n", epoch, loss);
+    }
+
+    /* Accuracy = fraction where argmax(prediction) == argmax(one-hot label). */
+    size_t correct = 0;
+    for (size_t i = 0; i < d.n_samples; ++i) {
+        Matrix xv = dataset_input(&d, i);
+        Matrix tv = dataset_target(&d, i);
+        const Matrix *out = net_forward(&net, &xv);
+        correct += (mat_argmax(out) == mat_argmax(&tv));
+    }
+    double acc = 100.0 * (double)correct / (double)d.n_samples;
+    printf("\n  train accuracy: %zu/%zu (%.1f%%)\n\n",
+           correct, d.n_samples, acc);
+
+    net_free(&net);
+    dataset_free(&d);
+
+    return acc >= 95.0;
+}
+
 int main(void)
 {
 #if ENABLE_CRT_LEAK_CHECK
@@ -328,6 +390,7 @@ int main(void)
     int ok_grad = run_gradient_check();
     int ok_csv  = run_csv_minibatch_demo();
     int ok_adam = run_adam_save_load_demo();
+    int ok_iris = run_iris_softmax_demo();
 
     printf("--- summary ---\n");
     printf("  OR (logistic regression) : %s\n", ok_or   ? "PASS" : "FAIL");
@@ -335,10 +398,11 @@ int main(void)
     printf("  gradient check           : %s\n", ok_grad ? "PASS" : "FAIL");
     printf("  CSV + mini-batch (2-8-1) : %s\n", ok_csv  ? "PASS" : "FAIL");
     printf("  Adam + save/load         : %s\n", ok_adam ? "PASS" : "FAIL");
+    printf("  Iris softmax (multi-class): %s\n", ok_iris ? "PASS" : "FAIL");
     printf("\nall resources released via clean teardown.\n"
            "verify zero leaks with: `make memcheck` (valgrind),\n"
            "`make asan` (sanitizers), or a debug MSVC build (CRT heap).\n");
 
-    return (ok_or && ok_xor && ok_grad && ok_csv && ok_adam)
+    return (ok_or && ok_xor && ok_grad && ok_csv && ok_adam && ok_iris)
                ? EXIT_SUCCESS : EXIT_FAILURE;
 }

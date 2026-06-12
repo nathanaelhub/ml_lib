@@ -186,6 +186,35 @@ double act_prime(double z, Activation a)
     }
 }
 
+size_t mat_argmax(const Matrix *m)
+{
+    size_t n    = m->rows * m->cols;
+    size_t best = 0;
+    for (size_t i = 1; i < n; ++i)
+        if (m->data[i] > m->data[best])
+            best = i;
+    return best;
+}
+
+/* Softmax over a layer's pre-activations, written into its activation
+ * cache. Max-shifted for numerical stability: a_k = e^(z_k - max) / sum. */
+static void layer_softmax(Layer *l)
+{
+    double m = l->z.data[0];
+    for (size_t o = 1; o < l->outputs; ++o)
+        if (l->z.data[o] > m)
+            m = l->z.data[o];
+
+    double sum = 0.0;
+    for (size_t o = 0; o < l->outputs; ++o) {
+        double e = exp(l->z.data[o] - m);
+        l->a.data[o] = e;
+        sum += e;
+    }
+    for (size_t o = 0; o < l->outputs; ++o)
+        l->a.data[o] /= sum;
+}
+
 /* ===================== single layer (bare API) ==================== */
 
 Layer layer_alloc(size_t inputs, size_t outputs)
@@ -341,9 +370,13 @@ const Matrix *net_forward(Network *net, const Matrix *x)
         if (mat_add(&l->z, &l->z, &l->b) != 0)
             return NULL;
 
-        /* a = activation(z) */
-        for (size_t o = 0; o < l->outputs; ++o)
-            l->a.data[o] = act_apply(l->z.data[o], l->act);
+        /* a = activation(z). Softmax couples all outputs; the rest are
+         * element-wise. */
+        if (l->act == ACT_SOFTMAX)
+            layer_softmax(l);
+        else
+            for (size_t o = 0; o < l->outputs; ++o)
+                l->a.data[o] = act_apply(l->z.data[o], l->act);
 
         input = &l->a;          /* feed this layer's output to the next */
     }
@@ -353,6 +386,18 @@ const Matrix *net_forward(Network *net, const Matrix *x)
 double net_loss(const Network *net, const Matrix *target)
 {
     const Layer *out = &net->layers[net->num_layers - 1];
+
+    if (out->act == ACT_SOFTMAX) {
+        /* Categorical cross-entropy: -sum_k t_k log(a_k). The 1e-15 floor
+         * guards against log(0) for a class the net drove to ~0. */
+        double ce = 0.0;
+        for (size_t o = 0; o < out->outputs; ++o) {
+            double a = out->a.data[o] < 1e-15 ? 1e-15 : out->a.data[o];
+            ce -= target->data[o] * log(a);
+        }
+        return ce;
+    }
+
     double sum = 0.0;
     for (size_t o = 0; o < out->outputs; ++o) {
         double d = out->a.data[o] - target->data[o];
@@ -375,11 +420,16 @@ int net_backprop_accum(Network *net, const Matrix *x, const Matrix *target)
     if (L == 0)
         return -1;
 
-    /* Output layer:  delta = (a - t) * act'(z) */
+    /* Output layer delta = dL/dz. For softmax + cross-entropy this is just
+     * (a - t) -- the softmax Jacobian and the CE derivative cancel. For the
+     * element-wise activations (with squared-error loss) it is the same
+     * (a - t) scaled by act'(z). */
     Layer *out = &net->layers[L - 1];
     for (size_t o = 0; o < out->outputs; ++o) {
         double d = out->a.data[o] - target->data[o];
-        out->delta.data[o] = d * act_prime(out->z.data[o], out->act);
+        out->delta.data[o] = (out->act == ACT_SOFTMAX)
+                                 ? d
+                                 : d * act_prime(out->z.data[o], out->act);
     }
 
     /* Hidden layers, propagating delta backward.
