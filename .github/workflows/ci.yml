@@ -12,7 +12,7 @@ jobs:
     name: make + valgrind (gcc, ubuntu)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install valgrind
         run: sudo apt-get update && sudo apt-get install -y valgrind
@@ -31,7 +31,7 @@ jobs:
     name: cmake + ctest (gcc, ubuntu)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure
         run: cmake -S . -B build
@@ -47,7 +47,7 @@ jobs:
     name: cl + run (MSVC, windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: ilammy/msvc-dev-cmd@v1
 
