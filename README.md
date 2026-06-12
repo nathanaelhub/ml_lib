@@ -23,19 +23,23 @@ The goal is clarity: every gradient is hand-derived, and a built-in
 - **Two models**
   - single sigmoid unit (logistic regression),
   - stackable `Network` MLP trained with full backpropagation.
+- **Mini-batch SGD** — shuffled mini-batches with gradient accumulation.
+- **CSV dataset loader** — load numeric feature/label rows; per-sample
+  access is zero-copy (a matrix row *is* a column vector).
 - **Gradient checking** — analytic gradients vs. central finite differences.
 - **Memory-safe** — every allocation has a clean teardown; double-frees are
   safe; verified leak-free (valgrind / sanitizers / MSVC CRT heap).
 
 ## Layout
 
-| File             | Purpose                                                        |
-| ---------------- | -------------------------------------------------------------- |
-| `ml_lib.h`       | Public API                                                     |
-| `ml_lib.c`       | Implementation (explicit loops + pointer arithmetic)           |
-| `main.c`         | Three self-checking demos (OR, XOR, gradient check)            |
-| `Makefile`       | `all` / `run` / `memcheck` / `asan` / `clean` (gcc + valgrind) |
-| `CMakeLists.txt` | Portable build (MSVC and gcc/clang) with `ctest` smoke test    |
+| File              | Purpose                                                        |
+| ----------------- | -------------------------------------------------------------- |
+| `ml_lib.h`        | Public API                                                     |
+| `ml_lib.c`        | Implementation (explicit loops + pointer arithmetic)           |
+| `main.c`          | Four self-checking demos (OR, XOR, gradient check, CSV batch)  |
+| `data/xor2d.csv`  | 300-point 2D nonlinear classification set for the batch demo   |
+| `Makefile`        | `all` / `run` / `memcheck` / `asan` / `clean` (gcc + valgrind) |
+| `CMakeLists.txt`  | Portable build (MSVC and gcc/clang) with `ctest` smoke test    |
 
 ## Build & run
 
@@ -76,12 +80,18 @@ ml_demo.exe
 
 === Demo 3: gradient check ===
   max |analytic - numerical| = 4.4e-11  (tolerance 1e-05)  PASS
+
+=== Demo 4: mini-batch training on a CSV dataset ===
+  loaded 300 samples (2 features, 1 outputs), batch size 16
+  epoch  199   mean loss = 0.001485
+  train accuracy: 300/300 (100.0%)
 ```
 
 XOR is **not** linearly separable, so a single unit provably cannot learn it —
-the 2-4-1 hidden layer (tanh → sigmoid) is what makes it work. The demo program
-returns a non-zero exit code if any check fails, so it doubles as a smoke test
-under `ctest`.
+the 2-4-1 hidden layer (tanh → sigmoid) is what makes it work. Demo 4 loads a
+300-point 2D nonlinear set from `data/xor2d.csv` and trains a 2-8-1 net with
+shuffled mini-batches to 100% accuracy. The demo program returns a non-zero
+exit code if any check fails, so it doubles as a smoke test under `ctest`.
 
 ## API sketch
 
@@ -98,6 +108,11 @@ const Matrix *net_forward(Network *net, const Matrix *x);
 double net_train_sample(Network *net, const Matrix *x, const Matrix *target, double lr);
 double net_gradient_check(Network *net, const Matrix *x, const Matrix *target, double eps);
 void   net_free(Network *net);
+
+/* dataset + mini-batch training */
+Dataset dataset_load_csv(const char *path, size_t n_features, size_t n_outputs, int skip_header);
+double  net_train_epoch(Network *net, const Dataset *d, size_t batch_size, double lr);
+void    dataset_free(Dataset *d);
 ```
 
 Build a 2-4-1 network, train it, and tear it down:
@@ -116,10 +131,11 @@ net_free(&net);
 
 ## Roadmap
 
-- Mini-batch training (turn `mat_mul` into the real workhorse)
-- CSV / dataset loader for problems larger than a truth table
-- Optimizers beyond plain SGD (momentum, Adam)
-- Save / load trained weights
+- [x] Mini-batch training (shuffled batches with gradient accumulation)
+- [x] CSV / dataset loader for problems larger than a truth table
+- [ ] Vectorized batch forward/backward (one `mat_mul` per layer per batch)
+- [ ] Optimizers beyond plain SGD (momentum, Adam)
+- [ ] Save / load trained weights
 
 ## License
 

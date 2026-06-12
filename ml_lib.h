@@ -141,11 +141,22 @@ const Matrix *net_forward(Network *net, const Matrix *x);
  * recent net_forward call. */
 double net_loss(const Network *net, const Matrix *target);
 
-/* Backpropagation for one sample: fills gW/gb in every layer. Requires a
+/* Backpropagation for one sample: overwrites gW/gb in every layer with
+ * that sample's gradient (it zeroes the accumulators first). Requires a
  * prior net_forward(net, x) with the same x. Does NOT update weights. */
 int net_backprop(Network *net, const Matrix *x, const Matrix *target);
 
-/* Apply the gradients from net_backprop: W -= lr*gW, b -= lr*gb. */
+/* Zero every layer's gradient accumulators (gW, gb). Call before summing
+ * a mini-batch's gradients with net_backprop_accum. */
+void net_zero_grad(Network *net);
+
+/* Add one sample's gradient into the accumulators (gW += ..., gb += ...)
+ * instead of overwriting. Requires a prior net_forward(net, x). This is
+ * the building block of mini-batch training. */
+int net_backprop_accum(Network *net, const Matrix *x, const Matrix *target);
+
+/* Apply the accumulated gradients: W -= lr*gW, b -= lr*gb. For a mini-batch
+ * pass lr scaled by 1/batch_size to average the summed gradient. */
 void net_step(Network *net, double lr);
 
 /* Convenience: forward + backprop + step on one sample. Returns the loss
@@ -161,5 +172,41 @@ double net_train_sample(Network *net, const Matrix *x, const Matrix *target,
  * absolute difference found (expect ~1e-7 or smaller when correct). */
 double net_gradient_check(Network *net, const Matrix *x,
                           const Matrix *target, double eps);
+
+/* ----------------------------- dataset ---------------------------- */
+
+/* A dataset stored as two row-major matrices: each row is one sample.
+ * Because a matrix row is contiguous, row i of X is already laid out as a
+ * (n_features x 1) column vector, so per-sample views need no copy. */
+typedef struct {
+    size_t  n_samples;
+    size_t  n_features;
+    size_t  n_outputs;
+    Matrix  X;      /* (n_samples x n_features) feature rows */
+    Matrix  Y;      /* (n_samples x n_outputs)  label rows   */
+} Dataset;
+
+Dataset dataset_alloc(size_t n_samples, size_t n_features, size_t n_outputs);
+void    dataset_free(Dataset *d);
+
+/* Load a numeric CSV where each row is n_features feature columns followed
+ * by n_outputs label columns (comma/space/semicolon/tab separated). If
+ * skip_header is non-zero the first line is ignored. Returns a Dataset
+ * whose X.data is NULL if the file could not be opened or held no rows. */
+Dataset dataset_load_csv(const char *path, size_t n_features,
+                         size_t n_outputs, int skip_header);
+
+/* Non-owning column-vector views into sample i. Do NOT mat_free these;
+ * they point into the dataset's own storage. */
+Matrix dataset_input(const Dataset *d, size_t i);    /* (n_features x 1) */
+Matrix dataset_target(const Dataset *d, size_t i);   /* (n_outputs  x 1) */
+
+/* ------------------------ mini-batch training --------------------- */
+
+/* One epoch of mini-batch SGD: shuffles the samples, and for each
+ * mini-batch accumulates the per-sample gradients and applies a single
+ * averaged update. Returns the mean loss over the epoch (-1.0 on error). */
+double net_train_epoch(Network *net, const Dataset *d, size_t batch_size,
+                       double lr);
 
 #endif /* ML_LIB_H */

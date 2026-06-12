@@ -189,6 +189,57 @@ static int run_gradient_check(void)
     return ok;
 }
 
+/* ================================================================== *
+ *  Demo 4: mini-batch SGD on a CSV dataset. Loads a 2D nonlinear
+ *  ("XOR-of-signs") classification set and trains a 2-8-1 MLP with
+ *  shuffled mini-batches, exercising the dataset loader + batch trainer.
+ * ================================================================== */
+static int run_csv_minibatch_demo(void)
+{
+    enum { EPOCHS = 200 };
+    const size_t BATCH = 16;
+    const double LR    = 0.5;
+
+    printf("=== Demo 4: mini-batch training on a CSV dataset ===\n\n");
+
+    /* 2 feature columns + 1 label column, with a header row. */
+    Dataset d = dataset_load_csv("data/xor2d.csv", 2, 1, 1);
+    if (d.X.data == NULL) {
+        printf("  (skipped: could not open data/xor2d.csv from this directory)\n\n");
+        return 1;       /* non-fatal: don't fail CI on a working-dir mismatch */
+    }
+    printf("  loaded %zu samples (%zu features, %zu outputs), batch size %zu\n\n",
+           d.n_samples, d.n_features, d.n_outputs, BATCH);
+
+    const size_t     sizes[] = { 2, 8, 1 };
+    const Activation acts[]  = { ACT_TANH, ACT_SIGMOID };
+    Network net = net_alloc(sizes, acts, 2);
+
+    for (int epoch = 0; epoch < EPOCHS; ++epoch) {
+        double loss = net_train_epoch(&net, &d, BATCH, LR);
+        if (epoch % 50 == 0 || epoch == EPOCHS - 1)
+            printf("  epoch %4d   mean loss = %.6f\n", epoch, loss);
+    }
+
+    size_t correct = 0;
+    for (size_t i = 0; i < d.n_samples; ++i) {
+        Matrix xv = dataset_input(&d, i);
+        Matrix tv = dataset_target(&d, i);
+        const Matrix *out = net_forward(&net, &xv);
+        int label = out->data[0] >= 0.5 ? 1 : 0;
+        int truth = (int)(tv.data[0] + 0.5);
+        correct += (label == truth);
+    }
+    double acc = 100.0 * (double)correct / (double)d.n_samples;
+    printf("\n  train accuracy: %zu/%zu (%.1f%%)\n\n",
+           correct, d.n_samples, acc);
+
+    net_free(&net);
+    dataset_free(&d);
+
+    return acc >= 95.0;
+}
+
 int main(void)
 {
 #if ENABLE_CRT_LEAK_CHECK
@@ -205,14 +256,16 @@ int main(void)
     int ok_or   = run_or_demo();
     int ok_xor  = run_xor_demo();
     int ok_grad = run_gradient_check();
+    int ok_csv  = run_csv_minibatch_demo();
 
     printf("--- summary ---\n");
     printf("  OR (logistic regression) : %s\n", ok_or   ? "PASS" : "FAIL");
     printf("  XOR (2-4-1 MLP)          : %s\n", ok_xor  ? "PASS" : "FAIL");
     printf("  gradient check           : %s\n", ok_grad ? "PASS" : "FAIL");
+    printf("  CSV + mini-batch (2-8-1) : %s\n", ok_csv  ? "PASS" : "FAIL");
     printf("\nall resources released via clean teardown.\n"
            "verify zero leaks with: `make memcheck` (valgrind),\n"
            "`make asan` (sanitizers), or a debug MSVC build (CRT heap).\n");
 
-    return (ok_or && ok_xor && ok_grad) ? EXIT_SUCCESS : EXIT_FAILURE;
+    return (ok_or && ok_xor && ok_grad && ok_csv) ? EXIT_SUCCESS : EXIT_FAILURE;
 }

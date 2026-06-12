@@ -23,3 +23,5 @@ target_link_libraries(ml_demo PRIVATE ml_lib)
 #      returns non-zero on any failure, so it doubles as a smoke test ----
 enable_testing()
 add_test(NAME ml_demo COMMAND ml_demo)
+# Run from the source tree so the demo finds data/xor2d.csv.
+set_tests_properties(ml_demo PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
