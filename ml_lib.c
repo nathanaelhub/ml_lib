@@ -199,6 +199,7 @@ Layer layer_alloc(size_t inputs, size_t outputs)
     l.act = ACT_SIGMOID;
     /* Training caches stay empty until a Network allocates them. */
     l.z = empty; l.a = empty; l.delta = empty; l.gW = empty; l.gb = empty;
+    l.mW = empty; l.vW = empty; l.mb = empty; l.vb = empty;
 
     /* Small symmetric random weights break the symmetry between units;
      * the bias starts at zero. */
@@ -218,6 +219,10 @@ void layer_free(Layer *l)
     mat_free(&l->delta);
     mat_free(&l->gW);
     mat_free(&l->gb);
+    mat_free(&l->mW);
+    mat_free(&l->vW);
+    mat_free(&l->mb);
+    mat_free(&l->vb);
     l->inputs  = 0;
     l->outputs = 0;
 }
@@ -295,6 +300,12 @@ Network net_alloc(const size_t *sizes, const Activation *acts,
         l.delta = mat_alloc(out, 1);
         l.gW    = mat_alloc(out, in);
         l.gb    = mat_alloc(out, 1);
+
+        /* Adam moment estimates (zeroed by calloc inside mat_alloc). */
+        l.mW    = mat_alloc(out, in);
+        l.vW    = mat_alloc(out, in);
+        l.mb    = mat_alloc(out, 1);
+        l.vb    = mat_alloc(out, 1);
 
         /* Fan-in scaled init keeps activations in a sane range. */
         double scale = 1.0 / sqrt((double)in);
@@ -608,8 +619,10 @@ Dataset dataset_load_csv(const char *path, size_t n_features,
 
 /* ======================= mini-batch training ===================== */
 
-double net_train_epoch(Network *net, const Dataset *d, size_t batch_size,
-                       double lr)
+/* Shared epoch loop. If `opt` is non-NULL the batch update uses Adam;
+ * otherwise it is plain SGD with learning rate `lr`. */
+static double train_epoch_impl(Network *net, const Dataset *d,
+                               size_t batch_size, double lr, Optimizer *opt)
 {
     size_t n = d->n_samples;
     if (n == 0 || batch_size == 0)
@@ -643,10 +656,169 @@ double net_train_epoch(Network *net, const Dataset *d, size_t batch_size,
             total += net_loss(net, &tv);
             net_backprop_accum(net, &xv, &tv);
         }
-        /* Average the summed gradient over the batch via the scaled rate. */
-        net_step(net, lr / (double)size);
+        if (opt != NULL)
+            net_step_adam(net, opt, size);
+        else
+            /* Average the summed gradient over the batch via the scaled rate. */
+            net_step(net, lr / (double)size);
     }
 
     free(idx);
     return total / (double)n;
+}
+
+double net_train_epoch(Network *net, const Dataset *d, size_t batch_size,
+                       double lr)
+{
+    return train_epoch_impl(net, d, batch_size, lr, NULL);
+}
+
+double net_train_epoch_adam(Network *net, const Dataset *d, size_t batch_size,
+                            Optimizer *opt)
+{
+    return train_epoch_impl(net, d, batch_size, 0.0, opt);
+}
+
+/* ========================= Adam optimizer ======================== */
+
+Optimizer adam_default(double lr)
+{
+    Optimizer o;
+    o.lr    = lr;
+    o.beta1 = 0.9;
+    o.beta2 = 0.999;
+    o.eps   = 1e-8;
+    o.t     = 0;
+    return o;
+}
+
+/* Adam update for one parameter block. `gsum` is the gradient summed over
+ * the batch; we scale by inv_b to get the mean. bc1/bc2 are the bias
+ * corrections (1 - beta^t) shared across all parameters this step. */
+static void adam_update(Matrix *p, const Matrix *gsum, Matrix *m, Matrix *v,
+                        const Optimizer *opt, double inv_b,
+                        double bc1, double bc2)
+{
+    size_t n = p->rows * p->cols;
+    for (size_t i = 0; i < n; ++i) {
+        double g = gsum->data[i] * inv_b;
+        m->data[i] = opt->beta1 * m->data[i] + (1.0 - opt->beta1) * g;
+        v->data[i] = opt->beta2 * v->data[i] + (1.0 - opt->beta2) * g * g;
+        double mhat = m->data[i] / bc1;
+        double vhat = v->data[i] / bc2;
+        p->data[i] -= opt->lr * mhat / (sqrt(vhat) + opt->eps);
+    }
+}
+
+void net_step_adam(Network *net, Optimizer *opt, size_t batch_size)
+{
+    double inv_b = 1.0 / (double)batch_size;
+    opt->t += 1;
+    double bc1 = 1.0 - pow(opt->beta1, (double)opt->t);
+    double bc2 = 1.0 - pow(opt->beta2, (double)opt->t);
+
+    for (size_t li = 0; li < net->num_layers; ++li) {
+        Layer *l = &net->layers[li];
+        adam_update(&l->W, &l->gW, &l->mW, &l->vW, opt, inv_b, bc1, bc2);
+        adam_update(&l->b, &l->gb, &l->mb, &l->vb, opt, inv_b, bc1, bc2);
+    }
+}
+
+/* ========================== persistence ========================== */
+
+int net_save(const Network *net, const char *path)
+{
+    FILE *f = fopen(path, "w");
+    if (f == NULL)
+        return -1;
+
+    fprintf(f, "ml_lib 1\n");
+    fprintf(f, "%zu\n", net->num_layers);
+    for (size_t li = 0; li < net->num_layers; ++li) {
+        const Layer *l = &net->layers[li];
+        fprintf(f, "%zu %zu %d\n", l->inputs, l->outputs, (int)l->act);
+    }
+    /* Weights then bias for each layer, full precision for exact round-trip. */
+    for (size_t li = 0; li < net->num_layers; ++li) {
+        const Layer *l  = &net->layers[li];
+        size_t       nw = l->W.rows * l->W.cols;
+        for (size_t k = 0; k < nw; ++k)
+            fprintf(f, "%.17g\n", l->W.data[k]);
+        for (size_t k = 0; k < l->b.rows; ++k)
+            fprintf(f, "%.17g\n", l->b.data[k]);
+    }
+
+    fclose(f);
+    return 0;
+}
+
+Network net_load(const char *path)
+{
+    Network empty;
+    empty.num_layers = 0;
+    empty.layers     = NULL;
+
+    FILE *f = fopen(path, "r");
+    if (f == NULL)
+        return empty;
+
+    char magic[32];
+    int  ver = 0;
+    if (fscanf(f, "%31s %d", magic, &ver) != 2 || strcmp(magic, "ml_lib") != 0) {
+        fclose(f);
+        return empty;
+    }
+
+    size_t L = 0;
+    if (fscanf(f, "%zu", &L) != 1 || L == 0) {
+        fclose(f);
+        return empty;
+    }
+
+    size_t     *sizes = (size_t *)malloc((L + 1) * sizeof(size_t));
+    Activation *acts  = (Activation *)malloc(L * sizeof(Activation));
+    if (sizes == NULL || acts == NULL) {
+        free(sizes); free(acts); fclose(f);
+        return empty;
+    }
+
+    int ok = 1;
+    for (size_t i = 0; i < L; ++i) {
+        size_t in, out;
+        int    act;
+        if (fscanf(f, "%zu %zu %d", &in, &out, &act) != 3) { ok = 0; break; }
+        if (i == 0)
+            sizes[0] = in;
+        else if (in != sizes[i]) { ok = 0; break; }    /* layers must chain */
+        sizes[i + 1] = out;
+        acts[i]      = (Activation)act;
+    }
+    if (!ok) {
+        free(sizes); free(acts); fclose(f);
+        return empty;
+    }
+
+    Network net = net_alloc(sizes, acts, L);
+    free(sizes);
+    free(acts);
+    if (net.layers == NULL) {
+        fclose(f);
+        return empty;
+    }
+
+    for (size_t li = 0; li < L && ok; ++li) {
+        Layer *l  = &net.layers[li];
+        size_t nw = l->W.rows * l->W.cols;
+        for (size_t k = 0; k < nw; ++k)
+            if (fscanf(f, "%lf", &l->W.data[k]) != 1) { ok = 0; break; }
+        for (size_t k = 0; k < l->b.rows && ok; ++k)
+            if (fscanf(f, "%lf", &l->b.data[k]) != 1) { ok = 0; break; }
+    }
+
+    fclose(f);
+    if (!ok) {
+        net_free(&net);
+        return empty;
+    }
+    return net;
 }

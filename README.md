@@ -24,8 +24,10 @@ The goal is clarity: every gradient is hand-derived, and a built-in
   - single sigmoid unit (logistic regression),
   - stackable `Network` MLP trained with full backpropagation.
 - **Mini-batch SGD** — shuffled mini-batches with gradient accumulation.
+- **Adam optimizer** — per-parameter adaptive moments with bias correction.
 - **CSV dataset loader** — load numeric feature/label rows; per-sample
   access is zero-copy (a matrix row *is* a column vector).
+- **Model save / load** — portable text format; exact (bit-identical) round-trip.
 - **Gradient checking** — analytic gradients vs. central finite differences.
 - **Memory-safe** — every allocation has a clean teardown; double-frees are
   safe; verified leak-free (valgrind / sanitizers / MSVC CRT heap).
@@ -36,7 +38,7 @@ The goal is clarity: every gradient is hand-derived, and a built-in
 | ----------------- | -------------------------------------------------------------- |
 | `ml_lib.h`        | Public API                                                     |
 | `ml_lib.c`        | Implementation (explicit loops + pointer arithmetic)           |
-| `main.c`          | Four self-checking demos (OR, XOR, gradient check, CSV batch)  |
+| `main.c`          | Five self-checking demos (OR, XOR, grad check, CSV batch, Adam)|
 | `data/xor2d.csv`  | 300-point 2D nonlinear classification set for the batch demo   |
 | `Makefile`        | `all` / `run` / `memcheck` / `asan` / `clean` (gcc + valgrind) |
 | `CMakeLists.txt`  | Portable build (MSVC and gcc/clang) with `ctest` smoke test    |
@@ -85,12 +87,19 @@ ml_demo.exe
   loaded 300 samples (2 features, 1 outputs), batch size 16
   epoch  199   mean loss = 0.001485
   train accuracy: 300/300 (100.0%)
+
+=== Demo 5: Adam optimizer + model save/load ===
+  epoch   99   mean loss = 0.000475
+  Adam train accuracy: 300/300 (100.0%)
+  save/load round-trip: max prediction diff = 0.0e+00  PASS
 ```
 
 XOR is **not** linearly separable, so a single unit provably cannot learn it —
-the 2-4-1 hidden layer (tanh → sigmoid) is what makes it work. Demo 4 loads a
-300-point 2D nonlinear set from `data/xor2d.csv` and trains a 2-8-1 net with
-shuffled mini-batches to 100% accuracy. The demo program returns a non-zero
+the 2-4-1 hidden layer (tanh → sigmoid) is what makes it work. Demos 4 and 5
+load a 300-point 2D nonlinear set from `data/xor2d.csv` and train a 2-8-1 net to
+100% accuracy — with mini-batch SGD, then with Adam (which reaches a lower loss
+in half the epochs). Demo 5 also saves the trained model, reloads it, and
+confirms the predictions are bit-identical. The demo program returns a non-zero
 exit code if any check fails, so it doubles as a smoke test under `ctest`.
 
 ## API sketch
@@ -113,6 +122,12 @@ void   net_free(Network *net);
 Dataset dataset_load_csv(const char *path, size_t n_features, size_t n_outputs, int skip_header);
 double  net_train_epoch(Network *net, const Dataset *d, size_t batch_size, double lr);
 void    dataset_free(Dataset *d);
+
+/* Adam optimizer + persistence */
+Optimizer adam_default(double lr);
+double    net_train_epoch_adam(Network *net, const Dataset *d, size_t batch_size, Optimizer *opt);
+int       net_save(const Network *net, const char *path);
+Network   net_load(const char *path);
 ```
 
 Build a 2-4-1 network, train it, and tear it down:
@@ -133,9 +148,10 @@ net_free(&net);
 
 - [x] Mini-batch training (shuffled batches with gradient accumulation)
 - [x] CSV / dataset loader for problems larger than a truth table
+- [x] Optimizers beyond plain SGD (Adam)
+- [x] Save / load trained weights
 - [ ] Vectorized batch forward/backward (one `mat_mul` per layer per batch)
-- [ ] Optimizers beyond plain SGD (momentum, Adam)
-- [ ] Save / load trained weights
+- [ ] Multi-class output (softmax + cross-entropy)
 
 ## License
 

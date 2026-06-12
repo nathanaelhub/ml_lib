@@ -240,6 +240,76 @@ static int run_csv_minibatch_demo(void)
     return acc >= 95.0;
 }
 
+/* ================================================================== *
+ *  Demo 5: the Adam optimizer, plus saving and reloading a trained
+ *  model. After training we save the network, load it back, and check
+ *  that the reloaded net produces bit-identical predictions.
+ * ================================================================== */
+static int run_adam_save_load_demo(void)
+{
+    enum { EPOCHS = 100 };
+    const size_t BATCH = 16;
+
+    printf("=== Demo 5: Adam optimizer + model save/load ===\n\n");
+
+    Dataset d = dataset_load_csv("data/xor2d.csv", 2, 1, 1);
+    if (d.X.data == NULL) {
+        printf("  (skipped: could not open data/xor2d.csv from this directory)\n\n");
+        return 1;
+    }
+
+    const size_t     sizes[] = { 2, 8, 1 };
+    const Activation acts[]  = { ACT_TANH, ACT_SIGMOID };
+    Network   net = net_alloc(sizes, acts, 2);
+    Optimizer opt = adam_default(0.01);
+
+    for (int epoch = 0; epoch < EPOCHS; ++epoch) {
+        double loss = net_train_epoch_adam(&net, &d, BATCH, &opt);
+        if (epoch % 25 == 0 || epoch == EPOCHS - 1)
+            printf("  epoch %4d   mean loss = %.6f\n", epoch, loss);
+    }
+
+    size_t correct = 0;
+    for (size_t i = 0; i < d.n_samples; ++i) {
+        Matrix xv = dataset_input(&d, i);
+        Matrix tv = dataset_target(&d, i);
+        const Matrix *out = net_forward(&net, &xv);
+        correct += ((out->data[0] >= 0.5 ? 1 : 0) == (int)(tv.data[0] + 0.5));
+    }
+    double acc = 100.0 * (double)correct / (double)d.n_samples;
+    printf("\n  Adam train accuracy: %zu/%zu (%.1f%%)\n",
+           correct, d.n_samples, acc);
+
+    /* Save -> load -> verify the reloaded model predicts identically. */
+    const char *path = "ml_lib_model.txt";
+    int     saved    = (net_save(&net, path) == 0);
+    Network reloaded = net_load(path);
+    int     loaded   = (reloaded.layers != NULL);
+
+    double max_diff = 0.0;
+    if (saved && loaded) {
+        for (size_t i = 0; i < d.n_samples; ++i) {
+            Matrix xv = dataset_input(&d, i);
+            double a  = net_forward(&net, &xv)->data[0];
+            double b  = net_forward(&reloaded, &xv)->data[0];
+            double dd = a - b;
+            if (dd < 0) dd = -dd;
+            if (dd > max_diff) max_diff = dd;
+        }
+    }
+    int roundtrip = saved && loaded && (max_diff < 1e-12);
+    printf("  save/load round-trip: max prediction diff = %.1e  %s\n\n",
+           max_diff, roundtrip ? "PASS" : "FAIL");
+
+    if (loaded)
+        net_free(&reloaded);
+    net_free(&net);
+    dataset_free(&d);
+    remove(path);                       /* tidy up the model file */
+
+    return (acc >= 95.0) && roundtrip;
+}
+
 int main(void)
 {
 #if ENABLE_CRT_LEAK_CHECK
@@ -257,15 +327,18 @@ int main(void)
     int ok_xor  = run_xor_demo();
     int ok_grad = run_gradient_check();
     int ok_csv  = run_csv_minibatch_demo();
+    int ok_adam = run_adam_save_load_demo();
 
     printf("--- summary ---\n");
     printf("  OR (logistic regression) : %s\n", ok_or   ? "PASS" : "FAIL");
     printf("  XOR (2-4-1 MLP)          : %s\n", ok_xor  ? "PASS" : "FAIL");
     printf("  gradient check           : %s\n", ok_grad ? "PASS" : "FAIL");
     printf("  CSV + mini-batch (2-8-1) : %s\n", ok_csv  ? "PASS" : "FAIL");
+    printf("  Adam + save/load         : %s\n", ok_adam ? "PASS" : "FAIL");
     printf("\nall resources released via clean teardown.\n"
            "verify zero leaks with: `make memcheck` (valgrind),\n"
            "`make asan` (sanitizers), or a debug MSVC build (CRT heap).\n");
 
-    return (ok_or && ok_xor && ok_grad && ok_csv) ? EXIT_SUCCESS : EXIT_FAILURE;
+    return (ok_or && ok_xor && ok_grad && ok_csv && ok_adam)
+               ? EXIT_SUCCESS : EXIT_FAILURE;
 }

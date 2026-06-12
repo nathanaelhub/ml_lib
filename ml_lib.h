@@ -97,6 +97,8 @@ typedef struct {
     Matrix      delta;      /* cache: error term dL/dz             */
     Matrix      gW;         /* cache: weight gradient dL/dW        */
     Matrix      gb;         /* cache: bias gradient   dL/db        */
+    Matrix      mW, vW;     /* Adam 1st/2nd moment estimates for W */
+    Matrix      mb, vb;     /* Adam 1st/2nd moment estimates for b */
 } Layer;
 
 /* Bare single-layer API (logistic regression). Caches are not allocated.
@@ -208,5 +210,41 @@ Matrix dataset_target(const Dataset *d, size_t i);   /* (n_outputs  x 1) */
  * averaged update. Returns the mean loss over the epoch (-1.0 on error). */
 double net_train_epoch(Network *net, const Dataset *d, size_t batch_size,
                        double lr);
+
+/* --------------------------- Adam optimizer ----------------------- */
+
+/* Adam (Kingma & Ba, 2014): per-parameter adaptive learning rates from
+ * running estimates of the gradient's 1st and 2nd moments. The moment
+ * buffers live in each Layer; this struct holds the hyper-parameters and
+ * the shared timestep used for bias correction. */
+typedef struct {
+    double lr;
+    double beta1;       /* 1st-moment decay (typ. 0.9)    */
+    double beta2;       /* 2nd-moment decay (typ. 0.999)  */
+    double eps;         /* numerical floor  (typ. 1e-8)   */
+    long   t;           /* timestep, incremented per step */
+} Optimizer;
+
+/* An Optimizer with the usual Adam defaults (0.9 / 0.999 / 1e-8, t=0). */
+Optimizer adam_default(double lr);
+
+/* Apply one Adam update from the accumulated gradients (gW/gb), which are
+ * treated as a sum over `batch_size` samples so the mean gradient is used.
+ * Increments opt->t. */
+void net_step_adam(Network *net, Optimizer *opt, size_t batch_size);
+
+/* One epoch of shuffled mini-batch training using Adam instead of plain
+ * SGD. Returns the mean loss over the epoch (-1.0 on error). */
+double net_train_epoch_adam(Network *net, const Dataset *d, size_t batch_size,
+                            Optimizer *opt);
+
+/* --------------------------- persistence -------------------------- */
+
+/* Save / load a network's architecture and weights as a portable text
+ * file. net_save returns 0 on success, -1 on an I/O error. net_load builds
+ * a fresh network (free it with net_free); on failure its `layers` is NULL.
+ * Round-trips exactly: reloaded weights are bit-identical to the saved ones. */
+int     net_save(const Network *net, const char *path);
+Network net_load(const char *path);
 
 #endif /* ML_LIB_H */
