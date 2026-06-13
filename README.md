@@ -12,6 +12,49 @@ than any external BLAS or ML framework.
 The goal is clarity: every gradient is hand-derived, and a built-in
 **gradient check** proves the backprop math is correct to ~1e-11.
 
+> 📊 **Visual walkthrough:** [project explainer page](https://nathanaelhub.github.io/ml_lib/)
+> (architecture, pipeline, and results).
+
+## Results
+
+These plots are produced by the C library itself — `tools/export_viz.c` links
+`ml_lib`, trains the models, and dumps the data that `tools/make_plots.py` renders.
+
+| Decision boundary | SGD vs Adam | Iris validation |
+| :---: | :---: | :---: |
+| ![Learned XOR decision boundary](docs/decision_boundary.png) | ![SGD vs Adam loss](docs/loss_curves.png) | ![Iris confusion matrix](docs/iris_confusion.png) |
+| A 2-8-1 MLP learns the non-linear XOR-of-signs boundary | Adam reaches a far lower loss in the same epochs | 93.3% on the held-out 20% (the two misses are the classic versicolor/virginica overlap) |
+
+## Architecture
+
+```mermaid
+flowchart TD
+  subgraph core["Linear algebra core"]
+    M["Matrix<br/>rows · cols · double* data"]
+    OPS["mat_mul · mat_add<br/>mat_transpose · activations"]
+  end
+  M --> OPS
+  OPS --> L["Layer<br/>W · b · activation<br/>+ grad / Adam caches"]
+  L --> NET["Network<br/>stack of Layers"]
+  NET --> FWD["net_forward<br/>z = Wx+b → a = act(z)"]
+  NET --> BWD["net_backprop<br/>δ propagated backward"]
+  FWD --> LOSS["net_loss<br/>squared error / cross-entropy"]
+  LOSS --> BWD
+  BWD --> OPT["net_step / Adam<br/>W -= lr·∂L/∂W"]
+  OPT --> NET
+```
+
+The training pipeline, end to end:
+
+```mermaid
+flowchart LR
+  CSV["dataset_load_csv"] --> SPLIT["dataset_split<br/>80 / 20"]
+  SPLIT --> BATCH["shuffle<br/>mini-batches"]
+  BATCH --> STEP["forward → loss<br/>→ backprop → Adam step"]
+  STEP -->|repeat epochs| BATCH
+  STEP --> EVAL["net_accuracy<br/>(held-out)"]
+```
+
 ## Highlights
 
 - **Zero dependencies** — only the C standard library (`libm` for `exp`/`tanh`).

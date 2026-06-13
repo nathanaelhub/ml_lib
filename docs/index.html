@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ml_lib — a neural network library in pure C</title>
+<style>
+  :root{
+    --bg:#0b1020; --panel:#131a2e; --panel2:#0f1526; --ink:#e6ebf5;
+    --muted:#97a3bd; --accent:#6366f1; --accent2:#22d3ee; --line:#243049;
+    --ok:#34d399;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#1b2444 0,var(--bg) 55%);
+    color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  a{color:var(--accent2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:980px;margin:0 auto;padding:0 22px}
+  header.hero{padding:74px 0 40px;text-align:center}
+  .badge{display:inline-block;font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--accent2);border:1px solid var(--line);border-radius:999px;padding:5px 14px;margin-bottom:18px}
+  h1{font-size:clamp(34px,6vw,58px);margin:.1em 0;line-height:1.05;
+    background:linear-gradient(90deg,#fff,#a6b3ff 60%,var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .tag{color:var(--muted);font-size:clamp(16px,2.4vw,21px);max-width:680px;margin:14px auto 0}
+  .cta{margin-top:26px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);
+    padding:11px 18px;border-radius:10px;font-weight:600;font-size:14px}
+  .btn.primary{background:linear-gradient(90deg,var(--accent),#4338ca);border-color:transparent}
+  section{padding:30px 0;border-top:1px solid var(--line);margin-top:30px}
+  h2{font-size:26px;margin:0 0 6px} .sub{color:var(--muted);margin:0 0 22px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
+  .card h3{margin:0 0 6px;font-size:16px}
+  .card p{margin:0;color:var(--muted);font-size:14px}
+  .stat{font-size:30px;font-weight:800;color:#fff}
+  .ok{color:var(--ok)}
+  figure{margin:0;background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  figure img{display:block;width:100%}
+  figcaption{color:var(--muted);font-size:13px;padding:10px 14px;background:var(--panel)}
+  .figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+  pre.mermaid{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:18px;text-align:center}
+  .pipe{display:flex;flex-wrap:wrap;gap:8px;align-items:center;color:var(--muted);font-size:14px}
+  .pill{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:6px 12px;color:var(--ink)}
+  code{background:#0d1426;border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:13px}
+  footer{color:var(--muted);font-size:14px;text-align:center;padding:40px 0 60px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="badge">Pure C · zero dependencies</div>
+    <h1>ml_lib</h1>
+    <p class="tag">A tiny neural-network library written entirely in C — a flat
+      <code>Matrix</code> type, hand-derived backpropagation, Adam, and a
+      multi-class softmax classifier, all in explicit loops and raw pointers.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/nathanaelhub/ml_lib">View on GitHub →</a>
+      <a class="btn" href="#results">See results</a>
+    </div>
+  </header>
+
+  <section id="what">
+    <h2>What it is</h2>
+    <p class="sub">Everything is built on one contiguous, row-major matrix — no BLAS, no framework.</p>
+    <div class="grid">
+      <div class="card"><h3>Linear algebra core</h3><p>Flat <code>double*</code> <code>Matrix</code>: multiply, add, transpose, random init — explicit loops &amp; pointer arithmetic.</p></div>
+      <div class="card"><h3>MLP + backprop</h3><p>Stackable layers, sigmoid / tanh / ReLU / softmax, full chain-rule backpropagation.</p></div>
+      <div class="card"><h3>Verified gradients</h3><p>Analytic gradients checked against finite differences to <span class="ok">~1e-10</span>.</p></div>
+      <div class="card"><h3>Training</h3><p>Mini-batch SGD &amp; Adam, CSV datasets, train/validation split, model save/load.</p></div>
+    </div>
+  </section>
+
+  <section id="arch">
+    <h2>Architecture</h2>
+    <p class="sub">How the pieces fit together.</p>
+    <pre class="mermaid">
+flowchart TD
+  subgraph core["Linear algebra core"]
+    M["Matrix<br/>rows · cols · double* data"]
+    OPS["mat_mul · mat_add<br/>mat_transpose · activations"]
+  end
+  M --> OPS
+  OPS --> L["Layer<br/>W · b · activation<br/>+ grad / Adam caches"]
+  L --> NET["Network<br/>stack of Layers"]
+  NET --> FWD["net_forward<br/>z = Wx+b → a = act(z)"]
+  NET --> BWD["net_backprop<br/>δ propagated backward"]
+  FWD --> LOSS["net_loss<br/>squared error / cross-entropy"]
+  LOSS --> BWD
+  BWD --> OPT["net_step / Adam<br/>W -= lr·∂L/∂W"]
+  OPT --> NET
+    </pre>
+  </section>
+
+  <section id="pipeline">
+    <h2>Training pipeline</h2>
+    <p class="sub">From a CSV file to a held-out accuracy number.</p>
+    <div class="pipe">
+      <span class="pill">dataset_load_csv</span>→
+      <span class="pill">dataset_split (80/20)</span>→
+      <span class="pill">shuffle mini-batches</span>→
+      <span class="pill">forward → loss → backprop</span>→
+      <span class="pill">Adam step</span>→
+      <span class="pill">net_accuracy (held-out)</span>
+    </div>
+  </section>
+
+  <section id="results">
+    <h2>Results</h2>
+    <p class="sub">Generated by the C library itself (a small client links <code>ml_lib</code> and dumps the data).</p>
+    <div class="figs">
+      <figure>
+        <img src="decision_boundary.png" alt="Learned XOR decision boundary">
+        <figcaption>A 2-8-1 MLP carves out the non-linear XOR-of-signs boundary — impossible for a single linear unit.</figcaption>
+      </figure>
+      <figure>
+        <img src="loss_curves.png" alt="SGD vs Adam loss curves">
+        <figcaption>Adam reaches a far lower loss than plain SGD in the same number of epochs.</figcaption>
+      </figure>
+      <figure>
+        <img src="iris_confusion.png" alt="Iris validation confusion matrix">
+        <figcaption>Softmax + cross-entropy on Iris: 93.3% on the held-out validation set (the two misses are the classic versicolor/virginica overlap).</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="quality">
+    <h2>Engineering</h2>
+    <div class="grid">
+      <div class="card"><div class="stat ok">0</div><p>memory leaks — valgrind &amp; MSVC CRT heap verified</p></div>
+      <div class="card"><div class="stat">3</div><p>CI toolchains green on every push (gcc·make·valgrind, CMake·ctest, MSVC)</p></div>
+      <div class="card"><div class="stat">6</div><p>self-checking demos that double as the smoke test</p></div>
+      <div class="card"><div class="stat ok">/W4</div><p>compiles clean with full warnings, C11, no dependencies</p></div>
+    </div>
+  </section>
+
+  <footer>
+    Built with hand-written C · <a href="https://github.com/nathanaelhub/ml_lib">github.com/nathanaelhub/ml_lib</a>
+  </footer>
+
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'dark',
+    themeVariables: { primaryColor:'#131a2e', primaryBorderColor:'#6366f1',
+      lineColor:'#3b4a6b', fontSize:'14px' } });
+</script>
+</body>
+</html>
